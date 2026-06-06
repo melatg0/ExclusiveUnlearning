@@ -1,8 +1,12 @@
 MODEL_NAME=Llama-3.2-1B-Instruct
 MODEL_PATH=meta-llama/Llama-3.2-1B-Instruct
+
+# Root directory for generated forget data. Override with DATA_DIR if needed.
+DATA_DIR="${DATA_DIR:-data}"
+
 python src/forget_data_sampling/sampling.py \
   --model_name_or_path ${MODEL_PATH} \
-  --output_file data/forget_samples/${MODEL_NAME}/sampled_texts.jsonl \
+  --output_file "${DATA_DIR}/forget_samples/${MODEL_NAME}/sampled_texts.jsonl" \
   --user_prompt_mode generate \
   --num_train_steps 400 \
   --per_device_train_batch_size 100 \
