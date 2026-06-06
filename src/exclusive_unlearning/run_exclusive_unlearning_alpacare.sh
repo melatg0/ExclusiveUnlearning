@@ -1,6 +1,9 @@
-MODEL_NAME="Llama-3.2-1B-Instruct"
-MODEL_PATH="meta-llama/Llama-3.2-1B-Instruct"
-MODEL_DATA="Llama-3.2-1B-Instruct"
+# Model. Override by exporting MODEL_PATH / MODEL_NAME / MODEL_DATA, e.g.
+# `MODEL_PATH=google/gemma-3-12b-it MODEL_NAME=gemma-3-12b-it MODEL_DATA=gemma-3-12b-it bash ...`
+# Use gemma-2-2b-it for fast local debugging.
+MODEL_NAME="${MODEL_NAME:-gemma-2-9b-it}"
+MODEL_PATH="${MODEL_PATH:-google/gemma-2-9b-it}"
+MODEL_DATA="${MODEL_DATA:-${MODEL_NAME}}"
 
 # Root directories. Override by exporting DATA_DIR / OUT_ROOT before running,
 # e.g. `DATA_DIR=/mnt/data OUT_ROOT=/mnt/out bash run_exclusive_unlearning_alpacare.sh`

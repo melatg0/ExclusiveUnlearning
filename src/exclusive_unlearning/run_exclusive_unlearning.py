@@ -27,6 +27,14 @@ from transformers import (
     set_seed,
 )
 
+# Make the shared helpers importable regardless of the current working directory
+# (scripts are launched as `python src/exclusive_unlearning/run_exclusive_unlearning.py`).
+import sys
+_SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
+from eu_common.chat_format import build_chat_messages, tokenizer_supports_system_role
+
 
 def is_rank_0():
     return not dist.is_initialized() or dist.get_rank() == 0
@@ -103,15 +111,19 @@ def build_chat_ids_labels_assistant_only(
     loss_on_full_sequence: bool,
     system_text: str = "",
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
-    msgs_full = [
-        {"role": "system", "content": system_text},
-        {"role": "user", "content": user_text},
-        {"role": "assistant", "content": assistant_text},
-    ]
-    msgs_prefix = [
-        {"role": "system", "content": system_text},
-        {"role": "user", "content": user_text},
-    ]
+    supports_system = tokenizer_supports_system_role(tokenizer)
+    msgs_full = build_chat_messages(
+        user_text=user_text,
+        assistant_text=assistant_text,
+        system_text=system_text,
+        supports_system=supports_system,
+    )
+    msgs_prefix = build_chat_messages(
+        user_text=user_text,
+        assistant_text=None,
+        system_text=system_text,
+        supports_system=supports_system,
+    )
 
     full_text = apply_chat_template_text(tokenizer, msgs_full, add_generation_prompt=False)
     prefix_text = apply_chat_template_text(tokenizer, msgs_prefix, add_generation_prompt=True)
