@@ -7,6 +7,13 @@ from typing import Optional, List, Dict, Tuple, Any
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, set_seed
 
+# Make the shared helpers importable regardless of the current working directory.
+import sys
+_SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
+from eu_common.chat_format import build_chat_messages, tokenizer_supports_system_role
+
 
 @dataclass
 class SampleArguments:
@@ -277,6 +284,10 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # Probe once whether this model's chat template accepts a system role
+    # (Gemma-2 does not). Reused at both self-generation sites below.
+    supports_system = tokenizer_supports_system_role(tokenizer)
+
     eos_ids: Optional[List[int]] = None
     if tokenizer.eos_token_id is not None:
         eos_ids = [int(tokenizer.eos_token_id)]
@@ -357,10 +368,12 @@ def main():
 
     # ===== prepare prefix for user self-generation (short-code style) =====
     if mode == "generate":
-        user_msgs = [
-            {"role": "system", "content": user_system_prompt},
-            {"role": "user", "content": ""},
-        ]
+        user_msgs = build_chat_messages(
+            user_text="",
+            assistant_text=None,
+            system_text=user_system_prompt,
+            supports_system=supports_system,
+        )
         user_prefix_ids = _apply_chat_template_strict(
             tokenizer,
             user_msgs,
@@ -426,10 +439,12 @@ def main():
 
             prompt_texts = []
             for ut in user_texts:
-                msgs = [
-                    {"role": "system", "content": assistant_system_prompt},
-                    {"role": "user", "content": ut},
-                ]
+                msgs = build_chat_messages(
+                    user_text=ut,
+                    assistant_text=None,
+                    system_text=assistant_system_prompt,
+                    supports_system=supports_system,
+                )
                 prompt_texts.append(
                     tokenizer.apply_chat_template(
                         msgs,
