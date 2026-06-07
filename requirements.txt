@@ -6,6 +6,7 @@ protobuf
 evaluate
 scikit-learn
 wandb
-transformers>=4.48
+transformers>=4.48,<4.50
 setuptools>=65.0.0
 trl<=0.17.0
+bitsandbytes>=0.41.0

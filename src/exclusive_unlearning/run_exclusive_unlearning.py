@@ -150,6 +150,7 @@ class ModelArguments:
     torch_dtype: Optional[str] = field(default=None)
     trust_remote_code: bool = field(default=True)
     low_cpu_mem_usage: bool = field(default=True)
+    attn_implementation: Optional[str] = field(default=None)
 
 
 @dataclass
@@ -858,14 +859,16 @@ def main():
     tokenizer.padding_side = "right"
 
     torch_dtype = getattr(torch, model_args.torch_dtype) if model_args.torch_dtype else None
-    model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path,
+    model_kwargs = dict(
         config=config,
         cache_dir=model_args.cache_dir,
         torch_dtype=torch_dtype,
         trust_remote_code=model_args.trust_remote_code,
         low_cpu_mem_usage=model_args.low_cpu_mem_usage,
     )
+    if model_args.attn_implementation is not None:
+        model_kwargs["attn_implementation"] = model_args.attn_implementation
+    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     start_id = prepare_tokenizer_and_model_for_padding(tokenizer, model)
 
