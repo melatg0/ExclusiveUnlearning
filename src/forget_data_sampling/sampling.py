@@ -208,10 +208,15 @@ def _generate_up_to_new_tokens(
     pad_token_id: int,
     eos_token_id: Optional[List[int]] = None,
 ) -> torch.Tensor:
+    from transformers import LogitsProcessorList
+    from transformers.generation import InfNanRemoveLogitsProcessor
+
     gen_kwargs = dict(
         do_sample=True,
         temperature=temperature,
         pad_token_id=pad_token_id,
+        # bf16 + temperature=2.0 can produce inf/nan logits; clamp them before sampling.
+        logits_processor=LogitsProcessorList([InfNanRemoveLogitsProcessor()]),
     )
     if top_k is not None:
         gen_kwargs["top_k"] = int(top_k)
