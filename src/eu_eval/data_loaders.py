@@ -32,6 +32,27 @@ from typing import Dict, Iterator, List, Optional, Tuple
 
 
 # ── SafeUnlearning loaders ────────────────────────────────────────────────────
+#
+# Actual repo structure (github.com/thu-coai/SafeUnlearning):
+#   evaluation/input_prompts/
+#     vicuna_test100.json        — Harm-1: 100 GPTFuzzer questions (Vicuna fmt)
+#     vicuna_test217.json        — Harm-2: 217 WildAttack questions (Vicuna fmt)
+#     vicuna_test2000_new.json   — JB-1:   100×20 = 2000 pre-built JB prompts
+#     vicuna_test4340_wildattack_new.json — JB-2: 217×20 = 4340 pre-built JB prompts
+#   data/ft_full_data/
+#     harmful_100.json           — raw Harm-1 questions (no chat formatting)
+#
+# Each JB record has: {id, question_idx, prompt}
+# where prompt is a full Vicuna-formatted string ending with "ASSISTANT:"
+# We strip the Vicuna wrapper and return the raw user content for Gemma.
+
+_VICUNA_PREFIX = (
+    "A chat between a curious user and an artificial intelligence assistant. "
+    "The assistant gives helpful, detailed, and polite answers to the user's questions. "
+    "USER: "
+)
+_VICUNA_SUFFIX = " ASSISTANT:"
+
 
 def _load_jsonl(path: str | Path) -> List[Dict]:
     records = []
@@ -43,100 +64,71 @@ def _load_jsonl(path: str | Path) -> List[Dict]:
     return records
 
 
+def _load_json(path: str | Path) -> object:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _strip_vicuna(prompt: str) -> str:
+    """Extract user content from a Vicuna-formatted prompt string."""
+    if prompt.startswith(_VICUNA_PREFIX):
+        prompt = prompt[len(_VICUNA_PREFIX):]
+    if prompt.endswith(_VICUNA_SUFFIX):
+        prompt = prompt[: -len(_VICUNA_SUFFIX)]
+    return prompt.strip()
+
+
 def load_harmful_questions(data_dir: str | Path, harm_set: int = 1) -> List[Dict]:
     """Load Harm-1 (100 GPTFuzzer) or Harm-2 (217 WildAttack) questions.
 
-    Parameters
-    ----------
-    data_dir:
-        Root of SafeUnlearning data, e.g. ``data/safeunlearning``.
-    harm_set:
-        1 → gptfuzzer_100.jsonl; 2 → wildattack_217.jsonl.
-
-    Each record has at least a ``question`` field; original records are returned
-    unchanged so callers can access extra metadata.
+    Returns records with a ``question`` field containing the raw question text.
     """
-    filenames = {1: "gptfuzzer_100.jsonl", 2: "wildattack_217.jsonl"}
+    filenames = {
+        1: "evaluation/input_prompts/vicuna_test100.json",
+        2: "evaluation/input_prompts/vicuna_test217.json",
+    }
     if harm_set not in filenames:
         raise ValueError(f"harm_set must be 1 or 2, got {harm_set}")
-    path = Path(data_dir) / "harmful_questions" / filenames[harm_set]
+    path = Path(data_dir) / filenames[harm_set]
     if not path.exists():
         raise FileNotFoundError(
             f"SafeUnlearning Harm-{harm_set} not found at {path}.\n"
-            "Clone https://github.com/thu-coai/SafeUnlearning and set data_dir correctly."
+            "Clone https://github.com/thu-coai/SafeUnlearning into data/safeunlearning/."
         )
-    records = _load_jsonl(path)
-    # Normalise: ensure each record has a 'question' key.
-    for r in records:
-        if "question" not in r:
-            # Some versions use 'query' or 'prompt'
-            r["question"] = r.get("query") or r.get("prompt") or ""
+    raw = _load_json(path)
+    records = []
+    for item in raw:
+        prompt = item.get("prompt", "")
+        question = _strip_vicuna(prompt) if prompt else item.get("question", "")
+        records.append({**item, "question": question})
     return records
 
 
-def load_jailbreak_templates(data_dir: str | Path) -> List[Dict]:
-    """Load the 20 jailbreak templates from SafeUnlearning.
-
-    Each record has a ``template`` field with ``{query}`` as the placeholder.
-    """
-    path = Path(data_dir) / "jailbreak_templates" / "templates.jsonl"
-    if not path.exists():
-        # Fallback: sometimes stored as templates.json (list)
-        alt = Path(data_dir) / "jailbreak_templates" / "templates.json"
-        if alt.exists():
-            with open(alt, "r", encoding="utf-8") as f:
-                obj = json.load(f)
-            if isinstance(obj, list):
-                return obj
-            raise ValueError(f"Unexpected format in {alt}")
-        raise FileNotFoundError(
-            f"Jailbreak templates not found at {path} or {alt}.\n"
-            "Clone https://github.com/thu-coai/SafeUnlearning."
-        )
-    return _load_jsonl(path)
-
-
-def build_jailbreak_prompts(
-    questions: List[Dict],
-    templates: List[Dict],
-) -> List[Dict]:
-    """Cross-product questions × templates → JB prompts.
-
-    Returns a list of dicts, each with:
-        ``prompt``          – the jailbreak prompt string
-        ``question``        – original harmful question
-        ``template_id``     – index of the template (0–19)
-        ``template_name``   – name/category field if present
-    """
-    prompts = []
-    for q in questions:
-        question_text = q["question"]
-        for tid, tmpl in enumerate(templates):
-            ttext = tmpl.get("template") or tmpl.get("jailbreak_prompt") or ""
-            try:
-                prompt = ttext.format(query=question_text)
-            except KeyError:
-                # Some templates use {prompt} instead of {query}
-                try:
-                    prompt = ttext.format(prompt=question_text)
-                except KeyError:
-                    prompt = ttext  # give up substituting
-            prompts.append(
-                {
-                    "prompt": prompt,
-                    "question": question_text,
-                    "template_id": tid,
-                    "template_name": tmpl.get("name") or tmpl.get("category") or f"tmpl_{tid}",
-                }
-            )
-    return prompts
-
-
 def load_jb_set(data_dir: str | Path, harm_set: int = 1) -> List[Dict]:
-    """Convenience: load Harm-N, load templates, return JB-N prompts."""
-    questions = load_harmful_questions(data_dir, harm_set)
-    templates = load_jailbreak_templates(data_dir)
-    return build_jailbreak_prompts(questions, templates)
+    """Load pre-built JB-1 (2000) or JB-2 (4340) jailbreak prompts.
+
+    Each record has: ``prompt`` (user content, Vicuna wrapper stripped),
+    ``question_idx``, ``id``.
+    """
+    filenames = {
+        1: "evaluation/input_prompts/vicuna_test2000_new.json",
+        2: "evaluation/input_prompts/vicuna_test4340_wildattack_new.json",
+    }
+    if harm_set not in filenames:
+        raise ValueError(f"harm_set must be 1 or 2, got {harm_set}")
+    path = Path(data_dir) / filenames[harm_set]
+    if not path.exists():
+        raise FileNotFoundError(f"JB-{harm_set} not found at {path}.")
+    raw = _load_json(path)
+    records = []
+    for item in raw:
+        prompt_raw = item.get("prompt", "")
+        records.append({
+            **item,
+            "prompt": _strip_vicuna(prompt_raw),
+            "prompt_vicuna": prompt_raw,  # keep original for reference
+        })
+    return records
 
 
 # ── StemQAMixture loader ──────────────────────────────────────────────────────
