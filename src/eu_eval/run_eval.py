@@ -109,6 +109,7 @@ def run_jailbreak_eval(
     shieldlm_model_path: str,
     shieldlm_batch_size: int = 8,
     skip_shieldlm: bool = False,
+    responses_cache_path: Optional[str] = None,
 ) -> Dict:
     from eu_eval.detector import generate_with_detector
 
@@ -117,28 +118,49 @@ def run_jailbreak_eval(
     deltas: List[float] = []
     forgotten_count = 0
 
-    print(f"Running jailbreak eval on {len(jb_prompts)} prompts …")
-    for i, item in enumerate(jb_prompts):
-        prompt = item["prompt"]
-        result = generate_with_detector(
-            model, tokenizer, prompt,
-            gen_tokens=gen_tokens,
-            num_sample_positions=num_sample_positions,
-            threshold=detector_threshold,
-        )
-        responses_with_detector.append(result["text"])
-        deltas.append(result["delta"])
-        if result["forgotten"]:
-            forgotten_count += 1
+    # Resume from cache if available (avoids re-running 22h generation after a crash)
+    if responses_cache_path and os.path.exists(responses_cache_path):
+        print(f"Loading cached responses from {responses_cache_path}")
+        with open(responses_cache_path, "r") as f:
+            cache = json.load(f)
+        responses_with_detector = cache["responses_with_detector"]
+        responses_without_detector = cache["responses_without_detector"]
+        deltas = cache["deltas"]
+        forgotten_count = sum(d < detector_threshold for d in deltas)
+        print(f"Loaded {len(responses_with_detector)} cached responses.")
+    else:
+        print(f"Running jailbreak eval on {len(jb_prompts)} prompts …")
+        for i, item in enumerate(jb_prompts):
+            prompt = item["prompt"]
+            result = generate_with_detector(
+                model, tokenizer, prompt,
+                gen_tokens=gen_tokens,
+                num_sample_positions=num_sample_positions,
+                threshold=detector_threshold,
+            )
+            responses_with_detector.append(result["text"])
+            deltas.append(result["delta"])
+            if result["forgotten"]:
+                forgotten_count += 1
 
-        # Without detector: raw generation
-        raw = _generate_response(model, tokenizer, prompt, max_new_tokens=gen_tokens)
-        responses_without_detector.append(raw)
+            raw = _generate_response(model, tokenizer, prompt, max_new_tokens=gen_tokens)
+            responses_without_detector.append(raw)
 
-        if (i + 1) % 50 == 0:
-            print(f"  {i+1}/{len(jb_prompts)}  forgotten_so_far={forgotten_count}")
+            if (i + 1) % 50 == 0:
+                print(f"  {i+1}/{len(jb_prompts)}  forgotten_so_far={forgotten_count}", flush=True)
 
-    questions = [item["question"] for item in jb_prompts]
+        # Save responses so ShieldLM scoring can resume without regenerating
+        if responses_cache_path:
+            os.makedirs(os.path.dirname(responses_cache_path) or ".", exist_ok=True)
+            with open(responses_cache_path, "w") as f:
+                json.dump({
+                    "responses_with_detector": responses_with_detector,
+                    "responses_without_detector": responses_without_detector,
+                    "deltas": deltas,
+                }, f)
+            print(f"Saved response cache to {responses_cache_path}")
+
+    questions = [item.get("question") or item.get("prompt", "") for item in jb_prompts]
 
     result_dict = {
         "n_prompts": len(jb_prompts),
@@ -262,6 +284,7 @@ def main() -> None:
         jb_prompts = rng.sample(jb_prompts, min(args.max_jailbreak_prompts, len(jb_prompts)))
     print(f"  {len(jb_prompts)} JB prompts loaded.")
 
+    cache_path = str(out_path).replace(".json", "_responses_cache.json")
     report["jailbreak_eval"] = run_jailbreak_eval(
         model, tokenizer, jb_prompts,
         detector_threshold=args.detector_threshold,
@@ -269,6 +292,7 @@ def main() -> None:
         num_sample_positions=args.detector_sample_positions,
         shieldlm_model_path=args.shieldlm_model,
         skip_shieldlm=args.skip_shieldlm,
+        responses_cache_path=cache_path,
     )
 
     # ── Detector threshold sweep (Table 8) ────────────────────────────────────
